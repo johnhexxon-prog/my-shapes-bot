@@ -7,15 +7,17 @@ intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
-# Debug print for API key
+# Debug prints
 print("DEBUG: SHAPES_API_KEY value is:", os.getenv("SHAPES_API_KEY"))
+print("DEBUG: DISCORD_BOT_TOKEN value is:", os.getenv("DISCORD_BOT_TOKEN"))
+print("DEBUG: CHANNEL_ID value is:", os.getenv("CHANNEL_ID"))
 
 # Set up Shapes API client (OpenAI-compatible)
 shapes_client = OpenAI(
     api_key=os.getenv("SHAPES_API_KEY"),
     base_url="https://api.shapes.inc/v1/"
 )
-shape_model = "shapesinc/your-shape-username"  # Your actual value here
+shape_model = "shapesinc/your-shape-username"  # Your actual value
 
 # Specify the channel ID where the bot should respond
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
