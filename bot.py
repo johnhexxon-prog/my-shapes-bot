@@ -7,12 +7,17 @@ intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
+# Debug prints (optional, remove later)
+print("DEBUG: SHAPES_API_KEY value is:", os.getenv("SHAPES_API_KEY"))
+print("DEBUG: DISCORD_BOT_TOKEN value is:", os.getenv("DISCORD_BOT_TOKEN"))
+print("DEBUG: CHANNEL_ID value is:", os.getenv("CHANNEL_ID"))
+
 # Set up Shapes API client (OpenAI-compatible)
 shapes_client = OpenAI(
     api_key=os.getenv("SHAPES_API_KEY"),
     base_url="https://api.shapes.inc/v1/"
 )
-shape_model = "shapesinc/nisa-fsq0"  # Replace with your actual shape username
+shape_model = "shapesinc/your-fixed-username"  # Use your actual fixed username here
 
 # Specify the channel ID where the bot should respond
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
@@ -23,34 +28,35 @@ async def on_ready():
 
 @client.event
 async def on_message(message):
-    # Only respond in the specific channel
     if message.channel.id != CHANNEL_ID:
         return
     
     if message.author == client.user:
-        return  # Ignore own messages
+        return
     
-    # Prepend user's name to the message for the AI to distinguish
-    user_message = f"{message.author.name}: {message.content}"
+    user_message = message.content
     
     try:
-        # Send to Shapes API with per-user context header
+        # Send to Shapes API with error handling
         response = shapes_client.chat.completions.create(
             model=shape_model,
-            messages=[{"role": "user", "content": user_message}],
-            extra_headers={"X-User-Id": str(message.author.id)}  # Maintains separate context per user
+            messages=[{"role": "user", "content": user_message}]
         )
         
-        # Get the AI response and truncate if too long (Discord limit: 2000 chars)
+        # Get the AI response
         ai_reply = response.choices[0].message.content
+        
+        # Truncate to under 2000 chars (Discord limit)
         if len(ai_reply) > 1990:
             ai_reply = ai_reply[:1990] + "... (truncated)"
         
         # Send back to Discord
         await message.channel.send(ai_reply)
+    
     except Exception as e:
-        # Fallback error message
-        await message.channel.send(f"Error: {str(e)[:100]}... Try again!")
+        # Fallback if API fails (e.g., network error, rate limit)
+        error_msg = f"Error getting response: {str(e)[:100]}... Try again later."
+        await message.channel.send(error_msg)
 
 # Run the bot
 client.run(os.getenv("DISCORD_BOT_TOKEN"))
