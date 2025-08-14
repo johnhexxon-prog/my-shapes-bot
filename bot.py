@@ -17,7 +17,7 @@ shapes_client = OpenAI(
     api_key=os.getenv("SHAPES_API_KEY"),
     base_url="https://api.shapes.inc/v1/"
 )
-shape_model = "shapesinc/your-fixed-username"  # Use your actual fixed username here
+shape_model = os.getenv("SHAPE_MODEL")  # Pulls from env var, e.g., "shapesinc/nisa-fsq0"
 
 # Specify the channel ID where the bot should respond
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
