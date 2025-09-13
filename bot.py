@@ -2,46 +2,7 @@ import discord
 from openai import OpenAI
 import os
 
-# --- Simple in-memory state: per-channel participants + short history ---
-STATE = {"channels": {}}  # {channel_id: {"order":[uid,uid], "participants":{uid: display}, "history":[{"role","content"}]} }
-MAX_HISTORY = 30  # keep last N messages in context (user+assistant)
-
-def _chan_state(cid: int):
-    st = STATE["channels"].get(cid)
-    if not st:
-        st = {"order": [], "participants": {}, "history": []}
-        STATE["channels"][cid] = st
-    return st
-
-def _register_participant(st, user_id: int, display: str):
-    uid = str(user_id)
-    if uid in st["participants"]:
-        st["participants"][uid] = display  # update display if changed
-        return
-    if len(st["order"]) < 2:
-        st["order"].append(uid)
-        st["participants"][uid] = display
-    # if already have 2, ignore extra users (your use-case is 2 people)
-
-def _roster_text(st):
-    names = [st["participants"][uid] for uid in st["order"] if uid in st["participants"]]
-    return ", ".join(names) if names else "(awaiting two participants)"
-
-def _system_prompt(st):
-    return (
-        "You are facilitating a two-person roleplay in this Discord channel.\n"
-        "Rules:\n"
-        "• Keep strict continuity of places/characters/items mentioned earlier in THIS channel.\n"
-        "• User messages are prefixed as 'Name: ...'. Do NOT speak for those names; narrate as world/NPCs and outcomes only.\n"
-        "• Keep replies concise unless more detail is clearly needed.\n"
-        f"Participants: {_roster_text(st)}"
-    )
-
-def _trim_history(st):
-    if len(st["history"]) > MAX_HISTORY:
-        st["history"] = st["history"][-MAX_HISTORY:]
-
-# --- Discord client setup ---
+# Set up Discord client
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
@@ -51,14 +12,25 @@ print("DEBUG: SHAPES_API_KEY value is:", os.getenv("SHAPES_API_KEY"))
 print("DEBUG: DISCORD_BOT_TOKEN value is:", os.getenv("DISCORD_BOT_TOKEN"))
 print("DEBUG: CHANNEL_ID value is:", os.getenv("CHANNEL_ID"))
 
-# Shapes (OpenAI-compatible)
+# Set up Shapes API client (OpenAI-compatible)
 shapes_client = OpenAI(
     api_key=os.getenv("SHAPES_API_KEY"),
     base_url="https://api.shapes.inc/v1/"
 )
-shape_model = os.getenv("SHAPE_MODEL")  # e.g., "shapesinc/nisa-fsq0"
+shape_model = os.getenv("SHAPE_MODEL")  # Pulls from env var, e.g., "shapesinc/nisa-fsq0"
 
+# Specify the channel ID where the bot should respond
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+
+# Conversation history (list of dicts: {"role": "user" or "assistant", "content": "..."})
+# We'll prefix user messages with their display name for context
+conversation_history = []
+
+# System prompt for roleplaying (customize as needed based on the model/character)
+SYSTEM_PROMPT = "You are Nisa, a roleplaying AI character. Engage in the roleplay, keeping track of the conversation and distinguishing between the two users based on their prefixed display names."
+
+# Maximum history length to prevent token overflow (adjust as needed)
+MAX_HISTORY = 20  # Keep last 20 messages (10 user-assistant pairs)
 
 @client.event
 async def on_ready():
@@ -71,44 +43,45 @@ async def on_message(message):
     if message.author == client.user:
         return
 
-    st = _chan_state(message.channel.id)
-    _register_participant(st, message.author.id, message.author.display_name)
+    # Prefix user's message with their display name (nickname if set, else username)
+    user_content = f"{message.author.display_name}: {message.content}"
 
-    # Prefix with speaker so the model can attribute lines
-    speaker = st["participants"].get(str(message.author.id), message.author.display_name)
-    user_line = f"{speaker}: {message.content}"
+    # Append to history
+    conversation_history.append({"role": "user", "content": user_content})
+
+    # Trim history if too long
+    if len(conversation_history) > MAX_HISTORY:
+        conversation_history.pop(0)
 
     try:
-        # Append the new user line to rolling history
-        st["history"].append({"role": "user", "content": user_line})
-        _trim_history(st)
+        # Prepare messages: system prompt + history
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history
 
-        # Build messages = system + rolling history
-        messages = [{"role": "system", "content": _system_prompt(st)}]
-        messages.extend(st["history"])
-
-        # Call the model
+        # Send to Shapes API
         response = shapes_client.chat.completions.create(
             model=shape_model,
             messages=messages
         )
 
         # Get the AI response
-        ai_reply = response.choices[0].message.content or ""
+        ai_reply = response.choices[0].message.content
 
-        # Save assistant reply for continuity
-        st["history"].append({"role": "assistant", "content": ai_reply})
-        _trim_history(st)
+        # Append AI reply to history
+        conversation_history.append({"role": "assistant", "content": ai_reply})
+
+        # Trim history again if needed (after adding assistant)
+        if len(conversation_history) > MAX_HISTORY:
+            conversation_history.pop(0)
 
         # Split and send in chunks if over 2000 chars
         max_length = 2000
-        text = ai_reply
-        while len(text) > 0:
-            chunk = text[:max_length]
-            text = text[max_length:]
+        while len(ai_reply) > 0:
+            chunk = ai_reply[:max_length]
+            ai_reply = ai_reply[max_length:]
             await message.channel.send(chunk)
 
     except Exception as e:
+        # Fallback if API fails (e.g., network error, rate limit)
         error_msg = f"Error getting response: {str(e)[:100]}... Try again later."
         await message.channel.send(error_msg)
 
