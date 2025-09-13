@@ -22,16 +22,6 @@ shape_model = os.getenv("SHAPE_MODEL")  # Pulls from env var, e.g., "shapesinc/n
 # Specify the channel ID where the bot should respond
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
-# Conversation history (list of dicts: {"role": "user" or "assistant", "content": "..."})
-# We'll prefix user messages with their display name for context
-conversation_history = []
-
-# System prompt for roleplaying (customize as needed based on the model/character)
-SYSTEM_PROMPT = "You are Nisa, a roleplaying AI character. Engage in the roleplay, keeping track of the conversation and distinguishing between the two users based on their prefixed display names."
-
-# Maximum history length to prevent token overflow (adjust as needed)
-MAX_HISTORY = 20  # Keep last 20 messages (10 user-assistant pairs)
-
 @client.event
 async def on_ready():
     print(f'Bot logged in as {client.user}')
@@ -43,35 +33,17 @@ async def on_message(message):
     if message.author == client.user:
         return
 
-    # Prefix user's message with their display name (nickname if set, else username)
-    user_content = f"{message.author.display_name}: {message.content}"
-
-    # Append to history
-    conversation_history.append({"role": "user", "content": user_content})
-
-    # Trim history if too long
-    if len(conversation_history) > MAX_HISTORY:
-        conversation_history.pop(0)
+    user_message = message.content
 
     try:
-        # Prepare messages: system prompt + history
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history
-
-        # Send to Shapes API
+        # Send to Shapes API with error handling
         response = shapes_client.chat.completions.create(
             model=shape_model,
-            messages=messages
+            messages=[{"role": "user", "content": user_message}]
         )
 
         # Get the AI response
         ai_reply = response.choices[0].message.content
-
-        # Append AI reply to history
-        conversation_history.append({"role": "assistant", "content": ai_reply})
-
-        # Trim history again if needed (after adding assistant)
-        if len(conversation_history) > MAX_HISTORY:
-            conversation_history.pop(0)
 
         # Split and send in chunks if over 2000 chars
         max_length = 2000
