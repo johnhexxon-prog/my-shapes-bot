@@ -1,116 +1,73 @@
-import os
-import re
 import discord
 from openai import OpenAI
+import os
 
-# ---- Discord setup ----
+# Set up Discord client
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
-# ---- Shapes (OpenAI-compatible) client ----
+# Debug prints (optional, remove later)
+print("DEBUG: SHAPES_API_KEY value is:", os.getenv("SHAPES_API_KEY"))
+print("DEBUG: DISCORD_BOT_TOKEN value is:", os.getenv("DISCORD_BOT_TOKEN"))
+print("DEBUG: CHANNEL_ID value is:", os.getenv("CHANNEL_ID"))
+
+# Set up Shapes API client (OpenAI-compatible)
 shapes_client = OpenAI(
     api_key=os.getenv("SHAPES_API_KEY"),
-    base_url="https://api.shapes.inc/v1/",
+    base_url="https://api.shapes.inc/v1/"
 )
-shape_model = os.getenv("SHAPE_MODEL")  # e.g., "shapesinc/nisa-fsq0"
+shape_model = os.getenv("SHAPE_MODEL")  # Pulls from env var, e.g., "shapesinc/nisa-fsq0"
 
+# Specify the channel ID where the bot should respond
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
-DISCORD_LIMIT = 2000  # hard limit
-SAFE_TEXT_LIMIT = 2000
-# For code blocks we need to reserve wrapper overhead: ```{lang}\n ... \n```
-def _code_wrapper_overhead(lang: str) -> int:
-    return 8 + len(lang)  # 3 backticks + lang + '\n' + '\n' + 3 backticks
+async def send_in_chunks(channel, text: str, limit: int = 2000):
+    """Send text to a Discord channel split into <=limit-sized chunks."""
+    if not text:
+        return
+    n = len(text)
+    start = 0
+    while start < n:
+        end = min(start + limit, n)
 
-def _split_plain(text: str, limit: int):
-    chunks = []
-    buf = ""
-    for para in text.splitlines(keepends=True):
-        # If a single line exceeds limit, split by spaces, then hard-cut
-        while len(para) > limit:
-            cut = para.rfind(" ", 0, limit)
-            if cut <= 0:
-                cut = limit
-            chunks.append((buf + para[:cut]) if buf else para[:cut])
-            buf = ""
-            para = para[cut:].lstrip()
-        candidate = (buf + para) if buf else para
-        if len(candidate) <= limit:
-            buf = candidate
-        else:
-            if buf:
-                chunks.append(buf)
-            buf = para
-    if buf:
-        chunks.append(buf)
-    return [c.rstrip("\n") for c in chunks]
+        # Prefer to break on a newline if there is one near the boundary.
+        newline = text.rfind('\n', start, end)
+        if newline != -1 and newline > start:
+            # If splitting at the newline avoids a tiny tail, use it.
+            if (end - newline) < 80:  # heuristic to avoid very short trailing chunk
+                end = newline + 1  # keep the newline with this chunk
 
-def _split_code(code: str, lang: str, limit: int):
-    wrap_overhead = _code_wrapper_overhead(lang)
-    inner_limit = max(1, limit - wrap_overhead)
-    raw_chunks = _split_plain(code, inner_limit)
-    return [f"```{lang}\n{c}\n```" for c in raw_chunks]
-
-def split_for_discord(message: str, limit: int = DISCORD_LIMIT):
-    """
-    Splits message into <=limit chunks. Preserves code fences across chunks.
-    Supports fenced blocks like ```lang\n...\n```.
-    """
-    chunks = []
-    # Find fenced code blocks and split around them
-    pattern = re.compile(r"```([^\n`]*)\n([\s\S]*?)```", re.MULTILINE)
-    pos = 0
-    for m in pattern.finditer(message):
-        pre = message[pos:m.start()]
-        lang = (m.group(1) or "").strip()
-        code = m.group(2)
-        # split pre as plain text
-        if pre:
-            chunks.extend(_split_plain(pre, limit))
-        # split code with wrappers
-        chunks.extend(_split_code(code, lang, limit))
-        pos = m.end()
-    tail = message[pos:]
-    if tail:
-        chunks.extend(_split_plain(tail, limit))
-    # Final safety: if anything still exceeds limit, hard-cut
-    fixed = []
-    for c in chunks:
-        if len(c) <= limit:
-            fixed.append(c)
-        else:
-            for i in range(0, len(c), limit):
-                fixed.append(c[i:i+limit])
-    # Drop empty pieces
-    return [c for c in fixed if c.strip() != ""]
+        await channel.send(text[start:end])
+        start = end
 
 @client.event
 async def on_ready():
     print(f'Bot logged in as {client.user}')
 
 @client.event
-async def on_message(message: discord.Message):
+async def on_message(message):
     if message.channel.id != CHANNEL_ID:
         return
     if message.author == client.user:
         return
 
     user_message = message.content
-
     try:
+        # Send to Shapes API with error handling
         response = shapes_client.chat.completions.create(
             model=shape_model,
-            messages=[{"role": "user", "content": user_message}],
+            messages=[{"role": "user", "content": user_message}]
         )
-        ai_reply = response.choices[0].message.content or ""
 
-        for part in split_for_discord(ai_reply, DISCORD_LIMIT):
-            await message.channel.send(part)
+        # Get the AI response and send in chunks (no truncation, no extra text)
+        ai_reply = response.choices[0].message.content or ""
+        await send_in_chunks(message.channel, ai_reply, limit=2000)
 
     except Exception as e:
-        error_msg = f"Error getting response: {str(e)[:300]}"
-        for part in split_for_discord(error_msg, DISCORD_LIMIT):
-            await message.channel.send(part)
+        # Fallback if API fails (e.g., network error, rate limit)
+        error_msg = f"Error getting response: {str(e)[:100]}... Try again later."
+        await send_in_chunks(message.channel, error_msg, limit=2000)
 
+# Run the bot
 client.run(os.getenv("DISCORD_BOT_TOKEN"))
