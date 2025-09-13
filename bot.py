@@ -26,6 +26,9 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 # We'll prefix user messages with their username for context
 conversation_history = []
 
+# System prompt for roleplaying (customize as needed based on the model/character)
+SYSTEM_PROMPT = "You are Nisa, a roleplaying AI character. Engage in the roleplay, keeping track of the conversation and distinguishing between the two users based on their prefixed names."
+
 # Maximum history length to prevent token overflow (adjust as needed)
 MAX_HISTORY = 20  # Keep last 20 messages (10 user-assistant pairs)
 
@@ -51,10 +54,13 @@ async def on_message(message):
         conversation_history.pop(0)
 
     try:
-        # Send full history to Shapes API
+        # Prepare messages: system prompt + history
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history
+
+        # Send to Shapes API
         response = shapes_client.chat.completions.create(
             model=shape_model,
-            messages=conversation_history
+            messages=messages
         )
 
         # Get the AI response
